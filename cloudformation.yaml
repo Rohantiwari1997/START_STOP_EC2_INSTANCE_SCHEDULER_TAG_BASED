@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lambda function to start/stop EC2 instances on weekdays'
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EC2StartStopPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                Resource: '*'
+
+  StartStopFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ec2-start-stop-scheduler
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          # Code will be uploaded separately
+          pass
+      Timeout: 60
+
+  StartScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: 'Start instances at 10 AM on weekdays'
+      ScheduleExpression: 'cron(0 10 ? * MON-FRI *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StartStopFunction.Arn
+          Id: StartTarget
+          Input: '{"action": "start"}'
+
+  StopScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: 'Stop instances at midnight on weekdays and all day weekends'
+      ScheduleExpression: 'cron(0 0 ? * TUE-SAT *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StartStopFunction.Arn
+          Id: StopTarget
+          Input: '{"action": "stop"}'
+
+  WeekendStopRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: 'Ensure instances are stopped on weekends'
+      ScheduleExpression: 'cron(0 9 ? * SAT,SUN *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StartStopFunction.Arn
+          Id: WeekendStopTarget
+          Input: '{"action": "stop"}'
+
+  StartPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StartStopFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StartScheduleRule.Arn
+
+  StopPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StartStopFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StopScheduleRule.Arn
+
+  WeekendPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StartStopFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WeekendStopRule.Arn
+
+Outputs:
+  LambdaFunctionArn:
+    Description: 'Lambda Function ARN'
+    Value: !GetAtt StartStopFunction.Arn
